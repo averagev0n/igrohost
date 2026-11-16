@@ -1,7 +1,7 @@
 {
   "name": "igrohost",
-  "version": "0.2.0",
-  "description": "Панель игровых серверов на своём ПК: Terraria, Valheim, Rust, CS2, Palworld, Project Zomboid, 7 Days to Die, Enshrouded",
+  "version": "0.3.0",
+  "description": "Панель игровых серверов на своём ПК: Terraria, Valheim, Rust, CS2, Palworld, Project Zomboid, 7 Days to Die, Enshrouded, V Rising, Core Keeper, TF2, L4D2, Garry's Mod",
   "author": "averagev0n",
   "main": "main.js",
   "private": true,

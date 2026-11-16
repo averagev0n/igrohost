@@ -139,7 +139,7 @@ function renderSide() {
   paintBadges(list);
   $('srv-new').setAttribute('aria-current', String(S.sel === 'new'));
   $('tg-open').setAttribute('aria-current', String(S.sel === 'tg'));
-  $('tg-sub').textContent = S.tg && S.tg.linked ? 'Telegram @' + S.tg.bot : S.tg && S.tg.connected ? 'ждёт привязки чата' : 'не настроены';
+  $('tg-sub').textContent = S.tg && S.tg.linked ? 'Telegram @' + S.tg.bot : S.tg && S.tg.connected ? 'ждёт привязки чата' : 'Telegram, Discord, телефон';
 
   // Страница окрашивается в цвет игры выбранного сервера.
   const cur = current();
@@ -220,7 +220,8 @@ function renderWizard() {
             h('span', { class: 'meta' }, 'Займёт на диске ' + g.size)
           )
         )
-      )
+      ),
+      importCard()
     );
   }
   const g = gameById(S.wizardGame);
@@ -249,6 +250,7 @@ function headNode(i) {
   const g = gameById(i.game);
   const st = [h('b', { class: 'st-' + i.state }, i.installed || i.state === 'installing' ? STATE[i.state] : 'Не установлен')];
   if (i.state === 'running' && i.startedAt) st.push(' ' + fmtUptime(Date.now() - i.startedAt));
+  if (i.asleep) st.push(' — уснул, пока никого не было');
   st.push(' · ' + g.title);
   return h(
     'div',
@@ -282,12 +284,19 @@ function statusNode(i) {
       h(
         'div',
         { class: 'addr' },
-        h('small', null, 'Адрес для друзей в вашей сети'),
+        i.joinCode
+          ? [h('small', null, i.joinCodeLabel), h('button', { type: 'button', class: 'addr-copy', title: 'Скопировать код', onclick: () => navigator.clipboard.writeText(i.joinCode).then(() => toast('Код скопирован')) }, i.joinCode), h('p', null, 'По коду друзья заходят из любой сети, порты не нужны.'), h('small', { class: 'gap' }, 'Или по адресу в вашей сети')]
+          : h('small', null, 'Адрес для друзей в вашей сети'),
         h('button', { type: 'button', class: 'addr-copy', title: 'Скопировать адрес', onclick: () => navigator.clipboard.writeText(address).then(() => toast('Адрес скопирован')) }, address),
         i.net.tunnel
           ? h('p', null, 'Через интернет: ', h('button', { type: 'button', class: 'link-btn mono', onclick: () => navigator.clipboard.writeText(i.net.tunnel).then(() => toast('Адрес туннеля скопирован')) }, i.net.tunnel))
           : h('p', null, i.net.upnp ? 'Порты на роутере панель откроет сама. ' : `Для игры через интернет нужны порты ${open}. `, h('button', { type: 'button', class: 'link-btn', onclick: () => select(i.id, 'net') }, 'Настроить')),
-        i.update && i.update.available ? h('p', { class: 'upd' }, 'Вышла новая версия сервера игры. ', h('button', { type: 'button', class: 'link-btn', onclick: () => select(i.id, 'settings') }, 'Обновить')) : null
+        i.update && i.update.available ? h('p', { class: 'upd' }, 'Вышла новая версия сервера игры. ', h('button', { type: 'button', class: 'link-btn', onclick: () => select(i.id, 'settings') }, 'Обновить')) : null,
+        h('button', { type: 'button', class: 'link-btn invite-btn', onclick: (e) => act(e.currentTarget, async () => {
+          const text = await api.call('invite:text', { id: i.id });
+          await navigator.clipboard.writeText(text);
+          toast('Приглашение скопировано — вставьте его в чат друзьям');
+        }) }, 'Скопировать приглашение для друзей')
       ),
       h(
         'div',
@@ -331,6 +340,84 @@ function statsNode(i) {
   );
 }
 
+// ---- график нагрузки ----
+// Два маленьких графика с общей вертикальной линией при наведении: процессор (0–100 %) и память.
+// Две разные величины — два графика, а не одна картинка с двумя шкалами.
+
+const SVG_NS = 'http://www.w3.org/2000/svg';
+const svg = (tag, attrs = {}) => {
+  const el = document.createElementNS(SVG_NS, tag);
+  for (const [k, v] of Object.entries(attrs)) el.setAttribute(k, v);
+  return el;
+};
+const timeHM = (ts) => new Date(ts).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
+const gbText = (mb) => (mb < 1024 ? `${mb} МБ` : `${(mb / 1024).toFixed(1).replace('.', ',')} ГБ`);
+
+function sparkPath(points, w, h, max) {
+  if (!points.length) return { line: '', area: '' };
+  const n = points.length;
+  const x = (k) => (n === 1 ? w : (k / (n - 1)) * w);
+  const y = (v) => h - 2 - (Math.min(v, max) / max) * (h - 4);
+  const line = points.map((v, k) => `${k ? 'L' : 'M'}${x(k).toFixed(1)},${y(v).toFixed(1)}`).join('');
+  return { line, area: `${line}L${w},${h}L0,${h}Z` };
+}
+
+function historyNode(i, data) {
+  const box = h('div', { id: 'hist', class: 'hist' });
+  if (!data || data.length < 2) {
+    box.hidden = true;
+    return box;
+  }
+  const W = 300;
+  const H = 46;
+  const memMax = Math.max(1024, ...data.map((p) => p.mem)) * 1.1;
+  const readout = h('p', { class: 'hist-read', 'aria-live': 'polite' });
+  const last = data[data.length - 1];
+  const idle = () => (readout.textContent = `За ${Math.round((data[data.length - 1].t - data[0].t) / 3600000) || 1} ч · сейчас ${String(last.cpu).replace('.', ',')}% и ${gbText(last.mem)}`);
+  idle();
+  const charts = [
+    { title: 'Процессор', values: data.map((p) => p.cpu), max: 100 },
+    { title: 'Память', values: data.map((p) => p.mem), max: memMax },
+  ].map((c) => {
+    const s = svg('svg', { viewBox: `0 0 ${W} ${H}`, preserveAspectRatio: 'none', class: 'spark', role: 'img', 'aria-label': `${c.title} за последние часы` });
+    const p = sparkPath(c.values, W, H, c.max);
+    s.append(svg('line', { x1: 0, x2: W, y1: H - 0.5, y2: H - 0.5, class: 'spark-base' }), svg('path', { d: p.area, class: 'spark-area' }), svg('path', { d: p.line, class: 'spark-line', 'vector-effect': 'non-scaling-stroke' }));
+    const cross = svg('line', { x1: 0, x2: 0, y1: 0, y2: H, class: 'spark-cross', 'vector-effect': 'non-scaling-stroke', visibility: 'hidden' });
+    s.append(cross);
+    return { ...c, el: s, cross };
+  });
+  // Наводим на любой из двух графиков — линия и подпись общие для обоих.
+  const onMove = (e) => {
+    const r = e.currentTarget.getBoundingClientRect();
+    const k = Math.max(0, Math.min(data.length - 1, Math.round(((e.clientX - r.left) / r.width) * (data.length - 1))));
+    const x = data.length === 1 ? W : (k / (data.length - 1)) * W;
+    for (const c of charts) {
+      c.cross.setAttribute('x1', x);
+      c.cross.setAttribute('x2', x);
+      c.cross.setAttribute('visibility', 'visible');
+    }
+    readout.textContent = `${timeHM(data[k].t)} · процессор ${String(data[k].cpu).replace('.', ',')}% · память ${gbText(data[k].mem)}`;
+  };
+  const onLeave = () => {
+    for (const c of charts) c.cross.setAttribute('visibility', 'hidden');
+    idle();
+  };
+  for (const c of charts) {
+    c.el.addEventListener('pointermove', onMove);
+    c.el.addEventListener('pointerleave', onLeave);
+    box.append(h('div', { class: 'spark-row' }, h('small', null, c.title), c.el));
+  }
+  box.append(readout);
+  return box;
+}
+
+function loadHistory(i) {
+  if (!$('hist')) return;
+  api.call('stats:history', { id: i.id }).then((data) => {
+    if (S.sel === i.id && $('hist')) $('hist').replaceWith(historyNode(i, data));
+  }, () => {});
+}
+
 /** Почему сервер упал в последний раз — пока его не запустили снова. */
 function crashNode(i) {
   const c = i.lastCrash;
@@ -348,7 +435,7 @@ function renderServer(i) {
   const body = h('div', { id: 'tab-body', class: 'tab-body stack' });
   ({ console: tabConsole, players: tabPlayers, net: tabNet, settings: tabSettings, files: tabFiles, mods: tabMods, backups: tabBackups })[S.tab](i, body);
   return [
-    h('aside', { class: 'left' }, headNode(i), crashNode(i), statsNode(i), statusNode(i)),
+    h('aside', { class: 'left' }, headNode(i), crashNode(i), statsNode(i), historyNode(i, null), statusNode(i)),
     h(
       'section',
       { class: 'right' + (S.tab === 'console' ? ' fill' : '') },
@@ -377,7 +464,24 @@ function tabConsole(i, body) {
     log.scrollTop = log.scrollHeight;
   };
   fill(S.logs.get(i.id) || []);
-  body.append(log);
+  const q = h('input', { type: 'search', placeholder: 'Найти в журнале', 'aria-label': 'Найти в журнале', class: 'log-q' });
+  const onlyErr = h('input', { type: 'checkbox' });
+  const applyFilter = () => {
+    const needle = q.value.trim().toLowerCase();
+    const errs = onlyErr.checked;
+    log.classList.toggle('filtered', !!(needle || errs));
+    for (const row of log.children) {
+      const show = (!errs || row.classList.contains('error') || /error|exception|fail|ошибк/i.test(row.textContent)) && (!needle || row.textContent.toLowerCase().includes(needle));
+      row.hidden = !show;
+    }
+  };
+  S.logFilter = applyFilter;
+  q.addEventListener('input', applyFilter);
+  onlyErr.addEventListener('change', applyFilter);
+  body.append(
+    h('div', { class: 'log-tools' }, q, h('label', { class: 'check' }, onlyErr, h('span', null, 'Только ошибки')), h('a', { class: 'btn small', href: `/api/log?id=${encodeURIComponent(i.id)}`, download: 'server-log.txt' }, 'Скачать журнал')),
+    log
+  );
   if (!S.logs.has(i.id)) {
     api.call('inst:lines', { id: i.id }).then((lines) => {
       S.logs.set(i.id, lines);
@@ -424,7 +528,9 @@ function appendLog(id, line, replace) {
   if (S.sel !== id || S.tab !== 'console' || !log) return;
   const stick = log.scrollHeight - log.scrollTop - log.clientHeight < 40;
   if (log.firstChild && log.firstChild.classList.contains('log-empty')) log.replaceChildren();
-  log.append(lineNode(line));
+  const node = lineNode(line);
+  log.append(node);
+  if (log.classList.contains('filtered') && S.logFilter) S.logFilter();
   while (log.childNodes.length > 2000) log.firstChild.remove();
   if (stick) log.scrollTop = log.scrollHeight;
 }
@@ -496,6 +602,44 @@ function tabPlayers(i, body) {
   }
   body.append(h('div', { class: 'card' }, h('h2', null, running ? `На сервере: ${i.players.length}` : 'Игроки'), list));
   if (i.playersNote) body.append(h('p', { class: 'meta' }, i.playersNote));
+  if (i.hasLists) body.append(listsNode(i));
+}
+
+function listsNode(i) {
+  const box = h('div', { class: 'stack' });
+  const draw = (lists, restart) => {
+    box.replaceChildren(
+      ...lists.map((l) => {
+        const input = h('input', { type: 'text', inputmode: 'numeric', placeholder: 'Steam ID, например 76561198000000000', maxlength: 17, 'aria-label': `Добавить в список «${l.title}»` });
+        return h(
+          'div',
+          { class: 'card stack' },
+          h('h2', null, l.title),
+          l.note ? h('p', { class: 'meta' }, l.note) : null,
+          h(
+            'div',
+            { class: 'list' },
+            l.entries.length
+              ? l.entries.map((id) => h('div', { class: 'item' }, h('div', { class: 'item-text mono' }, id), h('button', { type: 'button', class: 'btn small', onclick: (e) => act(e.currentTarget, async () => {
+                  const r = await api.call('lists:edit', { id: i.id, list: l.id, value: id, add: false });
+                  draw(r.lists, r.restart);
+                }) }, 'Убрать')))
+              : h('p', { class: 'empty' }, 'Список пуст.')
+          ),
+          h('form', { class: 'cmd', onsubmit: (e) => {
+            e.preventDefault();
+            act(e.currentTarget.querySelector('button'), async () => {
+              const r = await api.call('lists:edit', { id: i.id, list: l.id, value: input.value, add: true });
+              draw(r.lists, r.restart);
+            });
+          } }, input, h('button', { type: 'submit', class: 'btn' }, 'Добавить'))
+        );
+      }),
+      h('p', { class: 'meta' }, restart ? 'Изменения вступят в силу после перезапуска сервера.' : 'Steam ID видно в профиле Steam (адрес профиля с цифрами) или на сайте steamid.io.')
+    );
+  };
+  api.call('lists:get', { id: i.id }).then((lists) => draw(lists, false), (e) => box.replaceChildren(h('p', { class: 'empty' }, e.message)));
+  return box;
 }
 
 // доступ из интернета
@@ -634,6 +778,148 @@ function tabFiles(i, body) {
   }, (e) => holder.replaceChildren(h('p', { class: 'empty' }, e.message)));
 }
 
+// настройки: вторая папка для копий и сообщения
+
+function mirrorField(m) {
+  const input = h('input', { type: 'text', name: '__mirror', value: m.mirror, placeholder: 'например, D:\\Копии серверов', autocomplete: 'off', spellcheck: 'false' });
+  const pick = S.desktop
+    ? h('button', { type: 'button', class: 'btn', onclick: (e) => act(e.currentTarget, async () => {
+        const dir = await api.call('app:pickFolder');
+        if (dir) input.value = dir;
+      }) }, 'Выбрать')
+    : null;
+  return h(
+    'div',
+    { class: 'field' },
+    h('span', null, 'Ещё одна папка для копий'),
+    h('div', { class: 'cmd' }, input, pick),
+    h('span', { class: 'hint' }, 'Каждая копия ляжет и туда. Лучше другой диск или папка Яндекс Диска, OneDrive — тогда мир переживёт поломку диска. Пусто — не копировать')
+  );
+}
+
+function messageRow(msg = { every: 30, text: '' }) {
+  const row = h(
+    'div',
+    { class: 'msg-row' },
+    h('input', { type: 'text', class: 'msg-text', value: msg.text, maxlength: 200, placeholder: 'Текст сообщения', 'aria-label': 'Текст сообщения' }),
+    h('select', { class: 'msg-every', 'aria-label': 'Как часто' }, [10, 15, 30, 60, 120, 240].map((n) => h('option', { value: n, selected: n === msg.every }, n < 60 ? `раз в ${n} мин` : `раз в ${n / 60} ч`))),
+    h('button', { type: 'button', class: 'btn small', 'aria-label': 'Убрать сообщение', onclick: () => row.remove() }, 'Убрать')
+  );
+  return row;
+}
+
+function readMessages(form) {
+  return [...form.querySelectorAll('.msg-row')].map((r) => ({ text: r.querySelector('.msg-text').value, every: Number(r.querySelector('.msg-every').value) })).filter((x) => x.text.trim());
+}
+
+function messagesCard(i) {
+  const m = i.maint;
+  const g = gameById(i.game);
+  const rows = h('div', { class: 'stack' }, (m.messages || []).map(messageRow));
+  return h(
+    'div',
+    { class: 'card stack' },
+    h('h2', null, 'Сообщения игрокам'),
+    i.tracksPlayers
+      ? h(
+          'label',
+          { class: 'field' },
+          h('span', null, 'Приветствие при входе'),
+          h('input', { type: 'text', name: '__welcome', value: m.welcome, maxlength: 200, placeholder: 'Привет, {name}! Правила — в Discord' }),
+          h('span', { class: 'hint' }, '{name} заменится на имя игрока. Работает там, где сервер сообщает о входе')
+        )
+      : null,
+    h('b', null, 'По расписанию'),
+    rows,
+    h('div', { class: 'row' }, h('button', { type: 'button', class: 'btn small', onclick: () => rows.querySelectorAll('.msg-row').length < 10 && rows.append(messageRow()) }, 'Добавить сообщение')),
+    h('p', { class: 'meta' }, 'Сообщения уходят, только пока на сервере кто-то есть.')
+  );
+}
+
+// готовый сервер из папки
+
+function importCard() {
+  const path = h('input', { type: 'text', placeholder: 'Папка сервера, например D:\\Steam\\steamapps\\common\\Valheim dedicated server', autocomplete: 'off', spellcheck: 'false', 'aria-label': 'Папка сервера' });
+  const found = h('p', { class: 'meta' });
+  const go = h('button', { type: 'button', class: 'btn primary', hidden: true, onclick: (e) => act(e.currentTarget, async () => {
+    const v = await api.call('import:create', { path: path.value });
+    S.list = await api.call('inst:list');
+    select(v.id, 'console');
+    toast('Копирую файлы сервера — это может занять несколько минут');
+  }) }, 'Перенести');
+  const check = (btn) => act(btn, async () => {
+    go.hidden = true;
+    const r = await api.call('import:detect', { path: path.value });
+    found.textContent = `Найден сервер ${r.title}. Панель скопирует его файлы к себе — исходная папка не изменится.`;
+    go.hidden = false;
+  }).catch(() => {});
+  const pick = S.desktop
+    ? h('button', { type: 'button', class: 'btn', onclick: (e) => act(e.currentTarget, async () => {
+        const dir = await api.call('app:pickFolder');
+        if (dir) {
+          path.value = dir;
+          check(null);
+        }
+      }) }, 'Выбрать папку')
+    : null;
+  return h(
+    'div',
+    { class: 'card stack' },
+    h('h2', null, 'Уже есть сервер?'),
+    h('p', { class: 'meta' }, 'Если сервер уже скачан (через Steam или вручную), панель возьмёт его файлы — заново качать не придётся.'),
+    h('div', { class: 'cmd' }, path, pick, h('button', { type: 'button', class: 'btn', onclick: (e) => check(e.currentTarget) }, 'Проверить')),
+    found,
+    h('div', { class: 'row' }, go)
+  );
+}
+
+// перенос мира из одиночной игры
+
+function worldsCard(i) {
+  const list = h('div', { class: 'list' }, h('p', { class: 'empty' }, 'Ищу миры на этом компьютере…'));
+  const card = h(
+    'div',
+    { class: 'card stack' },
+    h('h2', null, 'Мир из одиночной игры'),
+    h('p', { class: 'meta' }, 'Играли одни, а теперь хотите продолжить с друзьями? Выберите мир — панель перенесёт его на сервер. Нынешний мир сервера сохранится отдельной копией.'),
+    list
+  );
+  api.call('worlds:list', { id: i.id }).then(
+    (worlds) => {
+      if (!worlds.length) return list.replaceChildren(h('p', { class: 'empty' }, 'На этом компьютере миров этой игры не нашлось.'));
+      list.replaceChildren(
+        ...worlds.map((w) =>
+          h(
+            'div',
+            { class: 'item' },
+            h('div', { class: 'item-text' }, h('div', { class: 'item-title' }, w.name), h('div', { class: 'item-sub' }, [`изменён ${fmtDate(w.mtime)}`, fmtSize(w.size), w.where].filter(Boolean).join(' · '))),
+            h(
+              'button',
+              {
+                type: 'button',
+                class: 'btn small',
+                disabled: i.state !== 'stopped',
+                title: i.state !== 'stopped' ? 'Сначала остановите сервер' : null,
+                onclick: async (e) => {
+                  const btn = e.currentTarget;
+                  if (!(await confirmBox(`Перенести мир «${w.name}» на сервер?`, 'Сервер будет запускать этот мир. Нынешний мир сервера сохранится копией — его можно вернуть во вкладке «Копии».', 'Перенести'))) return;
+                  act(btn, async () => {
+                    await api.call('worlds:import', { id: i.id, key: w.key });
+                    toast('Мир перенесён — запустите сервер');
+                  });
+                },
+              },
+              'Перенести'
+            )
+          )
+        )
+      );
+    },
+    (e) => list.replaceChildren(h('p', { class: 'empty' }, e.message))
+  );
+  return card;
+}
+
 // настройки
 
 function tabSettings(i, body) {
@@ -658,6 +944,11 @@ function tabSettings(i, body) {
               restartEnabled: form.elements.__rs.checked,
               restartTime: form.elements.__rtime.value,
               autoUpdate: form.elements.__upd.checked,
+              autostart: form.elements.__autostart.checked,
+              sleepMinutes: form.elements.__sleep ? Number(form.elements.__sleep.value) : 0,
+              mirror: form.elements.__mirror.value,
+              welcome: form.elements.__welcome ? form.elements.__welcome.value : '',
+              messages: readMessages(form),
             },
           });
           toast(res.needsRestart ? 'Сохранено. Настройки игры применятся после перезапуска сервера.' : 'Сохранено');
@@ -693,8 +984,20 @@ function tabSettings(i, body) {
           h('label', { class: 'check' }, h('input', { type: 'checkbox', name: '__upd', checked: m.autoUpdate }), h('span', null, 'Обновлять сервер игры сам')),
           h('span', { class: 'hint' }, 'Раз в три часа панель проверяет новую версию и ставит её, когда на сервере никого нет. Перед обновлением делается копия')
         )
-      )
+      ),
+      h('label', { class: 'check' }, h('input', { type: 'checkbox', name: '__autostart', checked: m.autostart }), h('span', null, 'Запускать сервер вместе с панелью')),
+      i.canSleep
+        ? h(
+            'label',
+            { class: 'field' },
+            h('span', null, 'Сон, когда никого нет'),
+            h('select', { name: '__sleep' }, [0, 10, 15, 30, 60].map((n) => h('option', { value: n, selected: n === m.sleepMinutes }, n ? `Выключать через ${n} мин без игроков` : 'Не выключать'))),
+            h('span', { class: 'hint' }, 'Компьютер не тратит силы на пустой сервер. Разбудить — кнопкой «Запустить» или командой /on в Telegram')
+          )
+        : null,
+      mirrorField(m)
     ),
+    g.console !== 'none' && i.canSay ? messagesCard(i) : null,
     h('div', { class: 'row' }, h('button', { type: 'submit', class: 'btn primary' }, 'Сохранить'))
   );
   body.append(
@@ -786,6 +1089,30 @@ function tabMods(i, body) {
     }
 
     if (info.hasCatalog) {
+      const upd = h('div', { class: 'list' });
+      kids.push(
+        h(
+          'div',
+          { class: 'card stack' },
+          h('div', { class: 'row' }, h('h2', { class: 'grow' }, 'Обновления модов'), h('button', {
+            type: 'button',
+            class: 'btn small',
+            onclick: (e) => act(e.currentTarget, async () => {
+              upd.replaceChildren(h('p', { class: 'empty' }, 'Проверяю…'));
+              const list = await api.call('mods:checkUpdates', { id: i.id }).catch((err) => {
+                upd.replaceChildren();
+                throw err;
+              });
+              if (!list.length) return upd.replaceChildren(h('p', { class: 'empty' }, 'Все моды из каталога — последних версий.'));
+              upd.replaceChildren(
+                ...list.map((m) => h('div', { class: 'item' }, h('div', { class: 'item-text' }, h('div', { class: 'item-title' }, m.title), h('div', { class: 'item-sub' }, `${m.current} → ${m.latest}`)))),
+                h('div', { class: 'row' }, h('button', { type: 'button', class: 'btn primary small', disabled: locked(), onclick: (ev) => op(ev.currentTarget, 'mods:update', { items: list.map((m) => m.id) }).then(() => toast('Моды обновлены')) }, `Обновить все (${list.length})`))
+              );
+            }),
+          }, 'Проверить')),
+          upd
+        )
+      );
       const results = h('div', { class: 'list' });
       const q = h('input', { type: 'search', placeholder: 'Название мода, например: kits', 'aria-label': 'Поиск модов' });
       const search = (btn) =>
@@ -884,6 +1211,7 @@ function tabMods(i, body) {
         )
       );
     }
+    if (info.folders.some((f) => f.items.length)) kids.push(modTestCard(i, locked));
     if (!info.frameworks.length && !info.folders.length && !info.hasCatalog && !info.note) {
       kids.push(h('p', { class: 'empty' }, 'Для этой игры панель пока не умеет ставить моды.'));
     }
@@ -891,6 +1219,42 @@ function tabMods(i, body) {
   };
   S.redrawMods = () => api.call('mods:get', { id: i.id }).then(draw, (e) => toast(e.message, true));
   S.redrawMods();
+}
+
+// поиск сломанного мода
+
+function modTestCard(i, locked) {
+  const box = h('div', { class: 'card stack', id: 'modtest' });
+  const draw = (t) => {
+    if (!box.isConnected && box.parentNode) return;
+    const kids = [h('h2', null, 'Поиск сломанного мода')];
+    if (t && !t.done) {
+      kids.push(
+        h('p', null, t.text || 'Готовлю…'),
+        h('p', { class: 'meta' }, `Модов: ${t.total}. Пробных запусков сделано: ${t.runs}, осталось около ${t.left}.`),
+        h('div', { class: 'row' }, h('button', { type: 'button', class: 'btn small', onclick: (e) => act(e.currentTarget, () => api.call('modtest:cancel', { id: i.id })) }, 'Остановить поиск'))
+      );
+    } else {
+      if (t && t.done) {
+        const r = t.result || {};
+        kids.push(
+          h(
+            'div',
+            { class: 'banner' + (r.culprit || t.error ? ' warn' : '') },
+            t.error ? `Поиск прерван: ${t.error}` : r.noRepro ? 'Со всеми модами сервер запустился — сломанного мода нет.' : r.combo ? 'Каждый мод по отдельности работает: сервер ломает их сочетание.' : `Сервер ломает мод «${r.culprit}»${r.needs && r.needs.length ? ` (вместе с ним проверялись: ${r.needs.join(', ')})` : ''}. Выключите или удалите его.`
+          )
+        );
+      }
+      kids.push(
+        h('p', { class: 'meta' }, 'Сервер падает при запуске из-за мода? Панель будет по очереди выключать половины модов и запускать сервер, пока не найдёт виновника. Мир перед этим сохранится и в конце вернётся, все моды встанут на место.'),
+        h('div', { class: 'row' }, h('button', { type: 'button', class: 'btn', disabled: locked(), onclick: (e) => act(e.currentTarget, async () => draw(await api.call('modtest:start', { id: i.id }))) }, 'Найти сломанный мод'))
+      );
+    }
+    box.replaceChildren(...kids);
+  };
+  S.drawModTest = draw;
+  api.call('modtest:get', { id: i.id }).then(draw, () => draw(null));
+  return box;
 }
 
 // копии
@@ -926,6 +1290,7 @@ function tabBackups(i, body) {
                 },
                 'Восстановить'
               ),
+              h('a', { class: 'btn small', href: `/api/backup?id=${encodeURIComponent(i.id)}&name=${encodeURIComponent(b.name)}`, download: b.name }, 'Скачать'),
               h(
                 'button',
                 {
@@ -950,7 +1315,8 @@ function tabBackups(i, body) {
       { class: 'card stack' },
       h('div', { class: 'row' }, h('div', { class: 'grow' }, h('h2', null, 'Резервные копии'), h('p', { class: 'meta' }, 'В копию попадают мир и настройки. Расписание — во вкладке «Настройки».')), h('button', { type: 'button', class: 'btn primary', disabled: !i.installed, onclick: (e) => act(e.currentTarget, () => api.call('backup:create', { id: i.id }).then(() => toast('Копия создана'))) }, 'Создать копию')),
       listEl
-    )
+    ),
+    i.worldsImport && i.installed ? worldsCard(i) : null
   );
   S.reloadBackups();
 }
@@ -967,7 +1333,7 @@ const TG_EVENTS = [
 
 function renderTg() {
   const t = S.tg || { connected: false };
-  const page = h('div', { class: 'page' }, h('h1', null, 'Уведомления'), h('p', { class: 'lead' }, 'Telegram-бот пишет, когда сервер запустился, упал или кто-то зашёл, и выполняет команды: запустить, остановить, сделать копию. В Discord панель только пишет. Работает, пока открыта панель.'), h('h2', { class: 'section' }, 'Telegram'));
+  const page = h('div', { class: 'page' }, h('h1', null, 'Связь'), h('p', { class: 'lead' }, 'Уведомления в Telegram и Discord, отчёт за неделю и управление с телефона. Работает, пока запущена панель — в том числе свёрнутая к часам.'), h('h2', { class: 'section' }, 'Telegram'));
   const apply = (info) => {
     S.tg = info;
     renderSide();
@@ -1024,12 +1390,42 @@ function renderTg() {
   return page;
 }
 
+// Discord-бот
+
+function discordBotCard() {
+  const card = h('div', { class: 'card stack' }, h('p', { class: 'empty' }, 'Загрузка…'));
+  const draw = (b) => {
+    if (!b.connected) {
+      const input = h('input', { type: 'text', placeholder: 'Токен бота', autocomplete: 'off', spellcheck: 'false', 'aria-label': 'Токен бота Discord' });
+      card.replaceChildren(
+        h('h2', null, 'Бот с командами'),
+        h('p', { class: 'meta' }, 'Команды /status, /on, /off, /restart, /backup прямо в Discord. Пользоваться ими смогут те, у кого на вашем сервере Discord есть право «Управлять сервером».'),
+        h('ol', { class: 'steps' }, h('li', null, 'Откройте discord.com/developers/applications → «New Application».'), h('li', null, 'Слева «Bot» → «Reset Token» → скопируйте токен.'), h('li', null, 'Вставьте токен сюда и нажмите «Подключить» — появится ссылка, чтобы добавить бота на ваш сервер Discord.')),
+        h('form', { class: 'cmd', onsubmit: (e) => {
+          e.preventDefault();
+          act(e.currentTarget.querySelector('button'), async () => draw(await api.call('dcbot:connect', { token: input.value })));
+        } }, input, h('button', { type: 'submit', class: 'btn primary' }, 'Подключить'))
+      );
+      return;
+    }
+    card.replaceChildren(
+      h('h2', null, `Бот ${b.name} ${b.online ? '· на связи' : '· подключается…'}`),
+      h('p', null, 'Добавьте бота на свой сервер Discord: ', h('a', { href: b.invite, target: '_blank', rel: 'noopener' }, 'ссылка для добавления'), '. Команды появятся через минуту.'),
+      h('label', { class: 'check' }, h('input', { type: 'checkbox', checked: b.control, onchange: (e) => act(null, async () => draw(await api.call('dcbot:set', { control: e.currentTarget.checked }))) }), h('span', null, 'Разрешить /on, /off, /restart, /backup (команда /status работает всегда)')),
+      h('div', { class: 'row' }, h('button', { type: 'button', class: 'btn danger', onclick: (e) => act(e.currentTarget, async () => draw(await api.call('dcbot:disconnect'))) }, 'Отключить бота'))
+    );
+  };
+  S.drawDcBot = draw;
+  api.call('dcbot:get').then(draw, (e) => card.replaceChildren(h('p', { class: 'empty' }, e.message)));
+  return card;
+}
+
 // Discord
 
 function discordCard() {
   const box = h('div', { class: 'stack' }, h('h2', { class: 'section' }, 'Discord'));
   const card = h('div', { class: 'card stack' }, h('p', { class: 'empty' }, 'Загрузка…'));
-  box.append(card);
+  box.append(card, discordBotCard());
   api.call('dc:get').then((d) => {
     const url = h('input', { type: 'text', value: d.url, placeholder: 'https://discord.com/api/webhooks/…', autocomplete: 'off', spellcheck: 'false', 'aria-label': 'Адрес вебхука' });
     const events = h('div', { class: 'stack' }, h('b', null, 'О чём писать'), TG_EVENTS.map(([k, label]) => h('label', { class: 'check' }, h('input', { type: 'checkbox', 'data-ev': k, checked: d.events[k], onchange: (e) => act(null, () => api.call('dc:set', { events: { [k]: e.currentTarget.checked } })) }), h('span', null, label))));
@@ -1043,6 +1439,68 @@ function discordCard() {
       h('div', { class: 'row' }, h('button', { type: 'button', class: 'btn', onclick: (e) => act(e.currentTarget, () => api.call('dc:test').then(() => toast('Сообщение отправлено — проверьте канал'))) }, 'Отправить проверку'))
     );
   }, (e) => card.replaceChildren(h('p', { class: 'empty' }, e.message)));
+  return box;
+}
+
+// отчёт за неделю
+
+function reportCard() {
+  return h(
+    'div',
+    { class: 'card stack' },
+    h('h2', null, 'Отчёт за неделю'),
+    h('p', { class: 'meta' }, 'По понедельникам после 10:00 панель присылает в Telegram и Discord, сколько работали серверы, кто и сколько играл, сколько было копий и падений.'),
+    h('div', { class: 'row' }, h('button', { type: 'button', class: 'btn', onclick: (e) => act(e.currentTarget, async () => {
+      await api.call('report:send');
+      toast('Отчёт отправлен');
+    }) }, 'Отправить сейчас'))
+  );
+}
+
+// телефон
+
+function phoneCard() {
+  const box = h('div', { class: 'stack' }, h('h2', { class: 'section' }, 'Телефон'));
+  const card = h('div', { class: 'card stack' }, h('p', { class: 'empty' }, 'Загрузка…'));
+  box.append(card);
+  const draw = (r) => {
+    const toggle = h('input', { type: 'checkbox', checked: r.enabled, onchange: (e) => act(null, async () => draw(await api.call('remote:set', { enabled: e.currentTarget.checked }))) });
+    const kids = [
+      h('label', { class: 'check' }, toggle, h('span', null, 'Открывать панель с телефона и других устройств в домашней сети')),
+      h('p', { class: 'meta' }, 'Из интернета панель недоступна — только из вашей Wi-Fi-сети. При первом включении Windows может спросить разрешение для сети: разрешите для частных сетей.'),
+    ];
+    if (r.enabled) {
+      kids.push(
+        h('div', { class: 'phone' },
+          h('div', null, h('small', null, 'Откройте на телефоне'), ...(r.urls.length ? r.urls.map((u) => h('b', { class: 'mono' }, u)) : [h('b', null, 'адрес не найден — проверьте Wi-Fi')])),
+          h('div', null, h('small', null, 'ПИН-код'), h('b', { class: 'pin' }, r.pin))
+        ),
+        h('p', { class: 'meta' }, `Вошли устройств: ${r.devices}. Новый ПИН-код выйдет из всех.`),
+        h('div', { class: 'row' }, h('button', { type: 'button', class: 'btn', onclick: (e) => act(e.currentTarget, async () => {
+          if (!(await confirmBox('Сменить ПИН-код?', 'Все телефоны, которые уже вошли, придётся подключить заново.', 'Сменить'))) return;
+          draw(await api.call('remote:newPin'));
+        }) }, 'Новый ПИН-код'))
+      );
+    }
+    card.replaceChildren(...kids);
+  };
+  api.call('remote:get').then(draw, (e) => card.replaceChildren(h('p', { class: 'empty' }, e.message)));
+  return box;
+}
+
+// программа: трей и автозапуск (только в окне программы)
+
+function appCard() {
+  const box = h('div', { class: 'stack' }, h('h2', { class: 'section' }, 'Программа'));
+  const card = h('div', { class: 'card stack' });
+  box.append(card);
+  Promise.all([api.call('app:prefs'), api.call('app:login')]).then(([prefs, login]) => {
+    card.replaceChildren(
+      h('label', { class: 'check' }, h('input', { type: 'checkbox', checked: prefs.closeToTray, onchange: (e) => act(null, () => api.call('app:prefs', { closeToTray: e.currentTarget.checked })) }), h('span', null, 'При закрытии окна оставаться у часов, не выключая серверы')),
+      h('div', { class: 'row' }, h('button', { type: 'button', class: 'btn', onclick: (e) => act(e.currentTarget, () => api.call('app:widget')) }, 'Мини-окно поверх всех окон')),
+      h('label', { class: 'check' }, h('input', { type: 'checkbox', checked: login.enabled, disabled: !login.available, onchange: (e) => act(null, () => api.call('app:login', { enabled: e.currentTarget.checked })) }), h('span', null, 'Запускать вместе с Windows', h('br'), h('span', { class: 'hint meta' }, 'Окно не откроется — панель сразу уйдёт к часам и запустит серверы с отметкой «Запускать вместе с панелью».')))
+    );
+  }, () => box.remove());
   return box;
 }
 
@@ -1073,12 +1531,14 @@ function renderMain() {
   const cur = current();
   if (S.sel === 'tg') {
     const page = renderTg();
-    page.append(discordCard());
+    page.append(reportCard(), discordCard(), phoneCard());
+    if (S.desktop) page.append(appCard());
     main.replaceChildren(page);
   }
   else if (S.sel === 'new' || !cur) main.replaceChildren(renderWizard());
   else main.replaceChildren(...renderServer(cur));
   main.className = 'desk ' + (S.sel !== 'tg' && S.sel !== 'new' && cur ? 'split' : 'single');
+  if (cur && S.sel === cur.id) loadHistory(cur);
   paintBadges(main);
   setBars(main);
   for (const el of main.querySelectorAll('.right, .page')) el.scrollTop = 0;
@@ -1145,8 +1605,21 @@ async function init() {
     if (p.id === S.sel && $('stats')) $('stats').replaceWith(statsNode(i));
   });
   on('update', renderUpdate);
+  on('modtest', (p) => {
+    if (p.id === S.sel && S.tab === 'mods' && S.drawModTest && $('modtest')) S.drawModTest(p);
+  });
+  on('dcbot', (b) => {
+    if (S.sel === 'tg' && S.drawDcBot) S.drawDcBot(b);
+  });
+  // График обновляется раз в минуту — новые точки появляются тоже раз в минуту.
+  setInterval(() => {
+    const i = current();
+    if (i && i.state === 'running') loadHistory(i);
+  }, 60000);
   // В браузере обновлений нет: команды update:* есть только в окне программы.
   api.call('update:state').then((st) => {
+    S.desktop = true;
+    if (S.sel === 'tg' || S.tab === 'settings') renderMain();
     renderUpdate(st);
     if (st.status === 'off') return;
     $('app-version').append(

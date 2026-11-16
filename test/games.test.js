@@ -9,7 +9,7 @@ const { parseProgress, explainError } = require('../lib/steamcmd');
 const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'igrohost-test-'));
 
 test('у каждой игры есть всё, что нужно панели', () => {
-  assert.deepStrictEqual(GAMES.map((g) => g.id), ['terraria', 'valheim', 'rust', 'cs2', 'palworld', 'zomboid', 'sdtd', 'enshrouded']);
+  assert.deepStrictEqual(GAMES.map((g) => g.id), ['terraria', 'valheim', 'rust', 'cs2', 'palworld', 'zomboid', 'sdtd', 'enshrouded', 'vrising', 'corekeeper', 'tf2', 'l4d2', 'gmod']);
   for (const g of GAMES) {
     const s = cleanSettings(g, {});
     assert.ok(g.fields.filter((f) => f.port).length === 1, g.id + ': одно поле порта');

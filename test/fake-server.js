@@ -10,6 +10,8 @@ if (process.argv.includes('--world')) {
   fs.writeFileSync(path.join(dir, 'world.wld'), 'v1');
 }
 if (process.argv.includes('--crash')) setTimeout(() => process.exit(3), 150);
+// Для поиска сломанного мода: падаем, если на месте «плохой» файл.
+if (process.argv.includes('--crash-if') && fs.existsSync(process.argv[process.argv.indexOf('--crash-if') + 1])) setTimeout(() => process.exit(4), 100);
 process.on('SIGINT', () => {
   console.log('Saving on Ctrl+C');
   setTimeout(() => process.exit(0), 50);

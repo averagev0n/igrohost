@@ -186,7 +186,7 @@ test('панель: создание серверов, порты, настро�
   const events = [];
   const app = createApp({ dataDir, emit: (ch, p) => events.push({ ch, p }), fetchFn: async () => ({ ok: false, status: 500, json: async () => ({}) }) });
   const info = await app.call('app:info');
-  assert.strictEqual(info.games.length, 8);
+  assert.strictEqual(info.games.length, 13);
 
   const a = await app.call('inst:create', { game: 'terraria', name: 'Первый', settings: { worldname: 'Мир' } });
   const b = await app.call('inst:create', { game: 'terraria', name: '' });

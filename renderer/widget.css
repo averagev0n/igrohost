@@ -1,0 +1,19 @@
+/* Мини-окно поверх всех окон: компактный список серверов на тёмной плашке. */
+:root { --ink: #231208; --paper: #fff6ea; --soft: rgba(255, 246, 234, .7); --ok: #8fd16a; --warn: #ffc93c; color-scheme: dark; }
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; }
+body { background: #2a160b; color: var(--paper); font: 13px/1.35 Rubik, "Segoe UI", sans-serif; overflow: hidden; user-select: none; }
+.w-bar { display: flex; align-items: center; gap: 8px; height: 34px; padding: 0 6px 0 10px; -webkit-app-region: drag; border-bottom: 1px solid rgba(255, 246, 234, .12); }
+.w-bar b { flex: 1; font-size: 13px; }
+.w-bar img { border-radius: 4px; }
+.w-btn { -webkit-app-region: no-drag; padding: 3px 9px; border: 1px solid rgba(255, 246, 234, .25); border-radius: 999px; background: none; color: var(--paper); font: inherit; font-size: 12px; cursor: pointer; }
+.w-btn:hover { background: rgba(255, 246, 234, .12); }
+.w-list { list-style: none; margin: 0; padding: 4px 0; overflow-y: auto; height: calc(100% - 34px); }
+.w-list li { display: grid; grid-template-columns: 10px minmax(0, 1fr) auto; align-items: center; gap: 8px; padding: 6px 10px; }
+.w-dot { width: 9px; height: 9px; border-radius: 50%; background: rgba(255, 246, 234, .3); }
+.w-dot.running { background: var(--ok); }
+.w-dot.starting, .w-dot.stopping, .w-dot.installing { background: var(--warn); }
+.w-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-weight: 500; }
+.w-name small { display: block; font-weight: 400; color: var(--soft); font-size: 11.5px; }
+.w-num { font: 600 12px "JetBrains Mono", Consolas, monospace; color: var(--soft); text-align: right; white-space: nowrap; }
+.w-empty { padding: 14px 10px; color: var(--soft); }
