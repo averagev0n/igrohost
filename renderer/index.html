@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Игрохост — панель игровых серверов</title>
+  <link rel="icon" href="icon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="fonts.css">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="bar">
+    <span class="brand"><img src="icon.svg" alt="" width="28" height="28"><b>Игрохост</b></span>
+    <span id="sum" class="sum"></span>
+    <div id="upd" class="upd-pill" role="status" hidden></div>
+    <button type="button" id="tg-open" class="tg-btn"><b>Уведомления</b><span id="tg-sub">не настроены</span></button>
+  </header>
+  <nav class="shelf" aria-label="Ваши серверы">
+    <div id="srv-list" class="carts"></div>
+    <button type="button" id="srv-new" class="add"><span aria-hidden="true">+</span>Новый сервер</button>
+  </nav>
+  <main class="desk single" id="main"></main>
+  <footer class="foot"><span id="app-version"></span><span>Неофициальная программа. Не связана с издателями игр; названия игр — товарные знаки их владельцев.</span></footer>
+  <div id="toasts" class="toasts" role="status" aria-live="polite"></div>
+  <dialog id="confirm" class="modal">
+    <form method="dialog">
+      <h2 id="confirm-title"></h2>
+      <p id="confirm-text"></p>
+      <div class="modal-actions">
+        <button type="submit" value="no" class="btn">Отмена</button>
+        <button type="submit" value="yes" id="confirm-yes" class="btn danger"></button>
+      </div>
+    </form>
+  </dialog>
+  <script src="app.js"></script>
+</body>
+</html>
